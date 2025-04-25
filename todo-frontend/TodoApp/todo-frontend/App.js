@@ -16,8 +16,8 @@ import {
 } from "react-native";
 import { Calendar } from "react-native-calendars";
 
-const API_URL = "http://192.168.7.84:5000/tasks";
-const USE_LOCAL_NOTIFICATIONS = false;
+const API_URL = "http://192.168.97.84:5000/tasks";
+const USE_LOCAL_NOTIFICATIONS = true;
 
 export default function App() {
   const [task, setTask] = useState("");
@@ -27,6 +27,7 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [currentTaskId, setCurrentTaskId] = useState(null);
+  const [currentNotificationId, setCurrentNotificationId] = useState(null);
   const [updatedTitle, setUpdatedTitle] = useState("");
   const [updatedDescription, setUpdatedDescription] = useState("");
   const [updatedTime, setUpdatedTime] = useState("");
@@ -53,78 +54,79 @@ export default function App() {
         const token = await Notifications.getExpoPushTokenAsync();
         console.log("Push token:", token.data);
         setPushToken(token.data);
-  
-        // Test notification
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: "Test Notification",
-            body: "This is a test from Expo Go",
-          },
-          trigger: { seconds: 5 },
-        });
       }
     };
     getPermissions();
     fetchTasks();
-
+  
     const notificationListener = Notifications.addNotificationReceivedListener(
       (notification) => {
         console.log("Notification received:", notification);
       }
     );
-
+  
     const responseListener =
       Notifications.addNotificationResponseReceivedListener((response) => {
         console.log("Notification response:", response);
       });
-
+  
     return () => {
       notificationListener.remove();
       responseListener.remove();
     };
   }, []);
 
-  const scheduleLocalNotification = async (
-    taskTitle,
-    taskDescription,
-    datetime
-  ) => {
-    if (!USE_LOCAL_NOTIFICATIONS) return;
+  const scheduleLocalNotification = async (taskTitle, taskDescription, datetime) => {
+    if (!USE_LOCAL_NOTIFICATIONS) return null;
     try {
-      await Notifications.scheduleNotificationAsync({
+      const triggerDate = new Date(datetime);
+      const now = new Date();
+      if (triggerDate <= now) {
+        console.error("Cannot schedule notification for past or current time:", datetime);
+        Alert.alert("Error", "Task time must be in the future");
+        return null;
+      }
+      const identifier = await Notifications.scheduleNotificationAsync({
         content: {
           title: taskTitle,
           body: taskDescription,
           data: { taskId: taskTitle },
         },
         trigger: {
-          date: new Date(datetime),
+          date: triggerDate,
         },
       });
-      console.log("Local notification scheduled for", taskTitle);
+      console.log("Local notification scheduled for", taskTitle, "at", triggerDate.toISOString(), "with ID:", identifier);
+      return identifier;
     } catch (error) {
       console.error("Error scheduling notification:", error);
       Alert.alert("Error", "Failed to schedule notification");
+      return null;
     }
   };
 
   const fetchTasks = async () => {
     try {
       const response = await fetch(`${API_URL}/all`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
       const data = await response.json();
+      console.log("Fetched tasks:", data);
       setTasks(data);
     } catch (error) {
-      console.error("Error fetching tasks:", error);
+      console.error("Error fetching tasks:", {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+      });
       Alert.alert("Error", "Failed to fetch tasks");
     }
   };
 
   const handleAddTask = async () => {
     if (!task || !description || !time || !date) {
-      Alert.alert(
-        "Missing Input",
-        "Please enter task, description, date, and time."
-      );
+      Alert.alert("Missing Input", "Please enter task, description, date, and time.");
       return;
     }
 
@@ -137,25 +139,23 @@ export default function App() {
     }
 
     const datetime = new Date(`${date}T${time}:00`).toISOString();
+    const notificationId = await scheduleLocalNotification(task, description, datetime);
     const newTask = {
       title: task,
       description,
       datetime,
       pushToken,
+      notificationId,
     };
 
     try {
       const response = await fetch(API_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newTask),
       });
-
       const data = await response.json();
       if (response.ok) {
-        await scheduleLocalNotification(task, description, datetime);
         setTask("");
         setDescription("");
         setTime("");
@@ -163,16 +163,25 @@ export default function App() {
         fetchTasks();
         Alert.alert("Success", "Task added successfully");
       } else {
+        console.error("Add task failed:", data);
         Alert.alert("Error", data.error || "Failed to add task");
       }
     } catch (error) {
-      console.error("Error adding task:", error);
+      console.error("Error adding task:", {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+      });
       Alert.alert("Error", "Could not connect to the server");
     }
   };
 
-  const handleDeleteTask = async (taskId) => {
+  const handleDeleteTask = async (taskId, notificationId) => {
     try {
+      if (notificationId) {
+        await Notifications.cancelScheduledNotificationAsync(notificationId);
+        console.log("Cancelled notification:", notificationId);
+      }
       const response = await fetch(`${API_URL}/${taskId}`, {
         method: "DELETE",
       });
@@ -191,19 +200,22 @@ export default function App() {
 
   const handleUpdateTask = async () => {
     if (!updatedTitle || !updatedDescription || !updatedTime || !updatedDate) {
-      Alert.alert(
-        "Missing Input",
-        "Please enter updated title, description, date, and time."
-      );
+      Alert.alert("Missing Input", "Please enter updated title, description, date, and time.");
       return;
     }
 
     const datetime = new Date(`${updatedDate}T${updatedTime}:00`).toISOString();
+    if (currentNotificationId) {
+      await Notifications.cancelScheduledNotificationAsync(currentNotificationId);
+      console.log("Cancelled notification:", currentNotificationId);
+    }
+    const notificationId = await scheduleLocalNotification(updatedTitle, updatedDescription, datetime);
     const updatedTask = {
       title: updatedTitle,
       description: updatedDescription,
       datetime,
       pushToken,
+      notificationId,
     };
 
     try {
@@ -214,17 +226,13 @@ export default function App() {
       });
       const data = await response.json();
       if (data.message === "Task updated successfully") {
-        await scheduleLocalNotification(
-          updatedTitle,
-          updatedDescription,
-          datetime
-        );
         fetchTasks();
         setModalVisible(false);
         setUpdatedTitle("");
         setUpdatedDescription("");
         setUpdatedTime("");
         setUpdatedDate("");
+        setCurrentNotificationId(null);
         Alert.alert("Success", "Task updated");
       } else {
         Alert.alert("Error", "Failed to update task");
@@ -239,14 +247,10 @@ export default function App() {
     setCurrentTaskId(task._id);
     setUpdatedTitle(task.title);
     setUpdatedDescription(task.description);
+    setCurrentNotificationId(task.notificationId);
     const dateObj = new Date(task.datetime);
     setUpdatedDate(dateObj.toISOString().split("T")[0]);
-    setUpdatedTime(
-      `${dateObj.getHours()}:${dateObj
-        .getMinutes()
-        .toString()
-        .padStart(2, "0")}`
-    );
+    setUpdatedTime(`${dateObj.getHours()}:${dateObj.getMinutes().toString().padStart(2, "0")}`);
     setUpdatedChosenTime(dateObj);
     setModalVisible(true);
   };
@@ -273,24 +277,14 @@ export default function App() {
     const currentTime = selectedDate || chosenTime;
     setShowTimePicker(Platform.OS === "ios");
     setChosenTime(currentTime);
-    setTime(
-      `${currentTime.getHours()}:${currentTime
-        .getMinutes()
-        .toString()
-        .padStart(2, "0")}`
-    );
+    setTime(`${currentTime.getHours()}:${currentTime.getMinutes().toString().padStart(2, "0")}`);
   };
 
   const onUpdateTimeChange = (event, selectedDate) => {
     const currentTime = selectedDate || updatedChosenTime;
     setShowUpdateTimePicker(Platform.OS === "ios");
     setUpdatedChosenTime(currentTime);
-    setUpdatedTime(
-      `${currentTime.getHours()}:${currentTime
-        .getMinutes()
-        .toString()
-        .padStart(2, "0")}`
-    );
+    setUpdatedTime(`${currentTime.getHours()}:${currentTime.getMinutes().toString().padStart(2, "0")}`);
   };
 
   return (
@@ -369,10 +363,7 @@ export default function App() {
           renderItem={({ item }) => {
             const dateObj = new Date(item.datetime);
             const date = dateObj.toISOString().split("T")[0];
-            const time = `${dateObj.getHours()}:${dateObj
-              .getMinutes()
-              .toString()
-              .padStart(2, "0")}`;
+            const time = `${dateObj.getHours()}:${dateObj.getMinutes().toString().padStart(2, "0")}`;
             return (
               <View style={styles.taskCard}>
                 <Text style={styles.taskText}>
@@ -383,7 +374,7 @@ export default function App() {
                 <View style={styles.buttonGroup}>
                   <TouchableOpacity
                     style={styles.deleteButton}
-                    onPress={() => handleDeleteTask(item._id)}
+                    onPress={() => handleDeleteTask(item._id, item.notificationId)}
                   >
                     <Text style={styles.buttonText}>Delete</Text>
                   </TouchableOpacity>
@@ -470,86 +461,20 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
-  container: {
-    padding: 20,
-  },
-  title: {
-    fontSize: 24,
-    textAlign: "center",
-    fontWeight: "bold",
-    marginBottom: 20,
-  },
-  input: {
-    height: 50,
-    borderColor: "#ccc",
-    borderWidth: 1,
-    borderRadius: 10,
-    marginBottom: 10,
-    paddingLeft: 10,
-  },
-  button: {
-    backgroundColor: "#007bff",
-    padding: 10,
-    borderRadius: 5,
-    marginBottom: 10,
-  },
-  buttonText: {
-    color: "#fff",
-    textAlign: "center",
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    marginTop: 20,
-  },
-  taskCard: {
-    backgroundColor: "#f9f9f9",
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 10,
-  },
-  taskText: {
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  taskDesc: {
-    fontSize: 14,
-    color: "#555",
-    marginVertical: 5,
-  },
-  buttonGroup: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  deleteButton: {
-    backgroundColor: "red",
-    padding: 5,
-    borderRadius: 5,
-  },
-  updateButton: {
-    backgroundColor: "green",
-    padding: 5,
-    borderRadius: 5,
-  },
-  modalWrapper: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  modalContainer: {
-    width: "80%",
-    backgroundColor: "white",
-    padding: 20,
-    borderRadius: 10,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 10,
-  },
+  wrapper: { flex: 1, backgroundColor: "#fff" },
+  container: { padding: 20 },
+  title: { fontSize: 24, textAlign: "center", fontWeight: "bold", marginBottom: 20 },
+  input: { height: 50, borderColor: "#ccc", borderWidth: 1, borderRadius: 10, marginBottom: 10, paddingLeft: 10 },
+  button: { backgroundColor: "#007bff", padding: 10, borderRadius: 5, marginBottom: 10 },
+  buttonText: { color: "#fff", textAlign: "center" },
+  sectionTitle: { fontSize: 18, fontWeight: "bold", marginTop: 20 },
+  taskCard: { backgroundColor: "#f9f9f9", padding: 15, borderRadius: 10, marginBottom: 10 },
+  taskText: { fontSize: 16, fontWeight: "bold" },
+  taskDesc: { fontSize: 14, color: "#555", marginVertical: 5 },
+  buttonGroup: { flexDirection: "row", justifyContent: "space-between" },
+  deleteButton: { backgroundColor: "red", padding: 5, borderRadius: 5 },
+  updateButton: { backgroundColor: "green", padding: 5, borderRadius: 5 },
+  modalWrapper: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.5)" },
+  modalContainer: { width: "80%", backgroundColor: "white", padding: 20, borderRadius: 10 },
+  modalTitle: { fontSize: 20, fontWeight: "bold", marginBottom: 10 },
 });
