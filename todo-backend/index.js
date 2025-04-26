@@ -7,16 +7,13 @@ const taskRoutes = require('./routes/taskRoutes');
 const { startNotificationService } = require('./notificationService');
 
 const app = express();
-const PORT = process.env.PORT || 5000; // Changed from 8081 to 5000
+const PORT = process.env.PORT || 5000;  
 
 app.use(cors());
 app.use(express.json());
 
 // MongoDB connection
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+mongoose.connect(process.env.MONGO_URI)
 .then(() => {
   console.log('MongoDB connected');
   startNotificationService();
