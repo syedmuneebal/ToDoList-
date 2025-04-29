@@ -1,28 +1,43 @@
 const express = require('express');
+const moment = require('moment-timezone');
 const router = express.Router();
-const Task = require('../models/Task');
+const Task = require('../models/task');
 
 // Create a new task
 router.post('/', async (req, res) => {
   try {
     const { title, description, datetime, pushToken } = req.body;
-    if (!title || !description || !datetime) {
+    if (!title || !description || !datetime || !pushToken) {
       return res.status(400).json({ error: 'Title, description, and datetime are required' });
     }
-    const newTask = new Task({ title, description, datetime: new Date(datetime), pushToken });
+
+    const datetimeIST = moment.tz(datetime, "Asia/Kolkata").toDate();
+    const newTask = new Task({ title, description, datetime: datetimeIST, pushToken });
     await newTask.save();
+
     res.status(201).json(newTask);
   } catch (error) {
-    console.error("Error adding task:", error);
-    res.status(500).json({ error: "Failed to add task" });
+    console.error("Error adding task:", error.message, error.stack);
+    res.status(500).json({ error: error.message });
   }
+  
 });
 
-// Get all tasks
+// Get all tasks with 
 router.get('/all', async (req, res) => {
   try {
     const tasks = await Task.find();
-    res.status(200).json(tasks);
+
+    const istTasks = tasks.map(task => {
+      return {
+        ...task.toObject(),
+        datetime: moment(task.datetime).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm:ss Z'),
+        createdAt: moment(task.createdAt).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm:ss Z'),
+        updatedAt: moment(task.updatedAt).tz('Asia/Kolkata').format('YYYY-MM-DD HH:mm:ss Z'),
+      };
+    });
+
+    res.status(200).json(istTasks);
   } catch (err) {
     console.error("Error fetching tasks:", err);
     res.status(500).json({ error: 'Failed to fetch tasks' });
@@ -49,15 +64,16 @@ router.put('/:id', async (req, res) => {
   const { title, description, datetime, pushToken } = req.body;
 
   try {
+    let updatedFields = { title, description, pushToken, completed: false };
+
+    if (datetime) {
+      updatedFields.datetime = moment.tz(datetime, "Asia/Kolkata").toDate();
+    }
+    
+
     const updatedTask = await Task.findByIdAndUpdate(
       id,
-      { 
-        title, 
-        description, 
-        datetime: datetime ? new Date(datetime) : undefined, 
-        pushToken,
-        completed: false 
-      },
+      updatedFields,
       { new: true, runValidators: true }
     );
 

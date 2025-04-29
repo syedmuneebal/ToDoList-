@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const { Expo } = require('expo-server-sdk');
-const Task = require('./models/Task');
+const Task = require('./models/task');
 
 const expo = new Expo();
 const startNotificationService = () => {

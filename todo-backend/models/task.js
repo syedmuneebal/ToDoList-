@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const moment = require('moment-timezone');
+const datetime = new Date();
+const currentDateIST =moment(datetime).tz("Asia/Kolkata").format();
+console.log(currentDateIST);
 
 const taskSchema = new mongoose.Schema({
   title: {
